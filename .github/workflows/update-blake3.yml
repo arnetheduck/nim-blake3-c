@@ -1,0 +1,67 @@
+name: Update BLAKE3
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get latest BLAKE3 release
+        id: latest
+        run: |
+          curl -sf https://api.github.com/repos/BLAKE3-team/BLAKE3/releases/latest -o release.json
+          version="$(jq -r .tag_name release.json)"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Unexpected version: $version"
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Resolve tag to commit
+        id: commit
+        run: |
+          commit="$(curl -sf "https://api.github.com/repos/BLAKE3-team/BLAKE3/git/ref/tags/${{ steps.latest.outputs.version }}" | python3 -c '
+          import json, sys, urllib.request
+          d = json.load(sys.stdin)
+          obj = d["object"]
+          if obj["type"] != "commit":
+              tag = json.load(urllib.request.urlopen(obj["url"]))
+              print(tag["object"]["sha"])
+          else:
+              print(obj["sha"])
+          ')"
+          echo "commit=$commit" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Update
+        id: update
+        run: |
+          sed -i -E \
+            -e "s/(VERSION=\"\\\$\{1:-)[0-9.]+/\1${{ steps.latest.outputs.version }}/" \
+            -e "s/(HASH=\"\\\$\{2:-)[0-9a-f]+/\1${{ steps.commit.outputs.commit }}/" \
+            update.sh
+          if ! git diff --exit-code; then
+            echo "changes=1" >> $GITHUB_OUTPUT
+          else
+            echo "changes=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download and commit
+        if: steps.update.outputs.changes == 1
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          ./update.sh
+
+      - name: Release
+        if: steps.update.outputs.changes == 1
+        run: |
+          tag="v${{ steps.latest.outputs.version }}"
+          git tag "$tag"
+          git push origin master
+          git push origin "$tag"

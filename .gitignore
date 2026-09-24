@@ -1,0 +1,6 @@
+nimble.cache
+nimcache/
+tests/test_blake3
+nimble.develop
+nimble.paths
+nimbledeps
